@@ -1,0 +1,71 @@
+name: mine
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "puzzleSeed W1 (hex 0x...)"
+        required: true
+        type: string
+      target:
+        description: "currentTarget (hex 0x...)"
+        required: true
+        type: string
+      round:
+        description: "round W1 saat dispatch"
+        required: true
+        type: string
+      shards:
+        description: "jumlah shard paralel"
+        required: false
+        type: string
+        default: "20"
+      minutes:
+        description: "budget grind per job (menit)"
+        required: false
+        type: string
+        default: "55"
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        run: |
+          python3 - <<'PY' >> $GITHUB_OUTPUT
+          import json
+          n = int("${{ inputs.shards }}")
+          print("matrix=" + json.dumps(list(range(n))))
+          PY
+
+  grind:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.prep.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build miner
+        run: gcc -O3 -march=native -o miner miner.c -lpthread
+      - name: Grind shard
+        id: grind
+        continue-on-error: true
+        run: |
+          set +e
+          ./miner --seed "${{ inputs.seed }}" --target "${{ inputs.target }}" \
+            --start ${{ matrix.shard }} --step ${{ inputs.shards }} --threads 4 \
+            --max-seconds $(( ${{ inputs.minutes }} * 60 )) --out result.txt
+          echo "miner_exit=$?" >> "$GITHUB_OUTPUT"
+          cat result.txt 2>/dev/null || echo "shard ini tidak menemukan nonce"
+      - name: Upload hasil
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: found-${{ inputs.round }}-${{ matrix.shard }}
+          path: result.txt
+          if-no-files-found: ignore
